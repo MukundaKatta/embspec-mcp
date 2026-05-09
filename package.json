@@ -1,0 +1,63 @@
+{
+  "name": "@mukundakatta/embspec-mcp",
+  "version": "0.1.0",
+  "mcpName": "io.github.MukundaKatta/embspec",
+  "description": "MCP server: embedding pipeline ops + drift detection for production RAG. Assert query encoder matches index manifest; compute retriever stability between two index versions on a frozen probe set.",
+  "type": "module",
+  "bin": {
+    "mcp-embspec": "dist/server.js"
+  },
+  "main": "dist/server.js",
+  "types": "dist/server.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/server.js",
+    "dev": "tsx src/server.ts",
+    "test": "node --test --import tsx test/*.test.ts",
+    "lint": "tsc --noEmit",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "claude",
+    "cursor",
+    "cline",
+    "windsurf",
+    "zed",
+    "embspec",
+    "rag",
+    "embeddings",
+    "drift",
+    "retrieval",
+    "vector",
+    "ai-tools"
+  ],
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE",
+    "server.json"
+  ],
+  "author": "Mukunda Katta",
+  "license": "Apache-2.0",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/MukundaKatta/embspec-mcp.git"
+  },
+  "homepage": "https://github.com/MukundaKatta/embspec-mcp#readme",
+  "bugs": {
+    "url": "https://github.com/MukundaKatta/embspec-mcp/issues"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsx": "^4.0.0",
+    "typescript": "^5.5.0"
+  }
+}

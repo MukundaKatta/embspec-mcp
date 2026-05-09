@@ -1,0 +1,21 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.MukundaKatta/embspec",
+  "description": "Embedding pipeline ops + drift detection for production RAG: assert query encoder matches index manifest; compute retriever stability between two index versions.",
+  "version": "0.1.0",
+  "repository": {
+    "url": "https://github.com/MukundaKatta/embspec-mcp",
+    "source": "github"
+  },
+  "websiteUrl": "https://github.com/MukundaKatta/embspec-mcp",
+  "packages": [
+    {
+      "registryType": "npm",
+      "identifier": "@mukundakatta/embspec-mcp",
+      "version": "0.1.0",
+      "transport": {
+        "type": "stdio"
+      }
+    }
+  ]
+}
