@@ -1,7 +1,12 @@
 # embspec-mcp
 
 [![npm](https://img.shields.io/npm/v/@mukundakatta/embspec-mcp.svg)](https://www.npmjs.com/package/@mukundakatta/embspec-mcp)
+[![npm downloads](https://img.shields.io/npm/dm/@mukundakatta/embspec-mcp.svg)](https://www.npmjs.com/package/@mukundakatta/embspec-mcp)
+[![CI](https://github.com/MukundaKatta/embspec-mcp/actions/workflows/test.yml/badge.svg)](https://github.com/MukundaKatta/embspec-mcp/actions/workflows/test.yml)
+[![Node](https://img.shields.io/node/v/@mukundakatta/embspec-mcp.svg)](https://nodejs.org)
+[![license](https://img.shields.io/npm/l/@mukundakatta/embspec-mcp.svg)](./LICENSE)
 [![mcp](https://img.shields.io/badge/mcp-stdio-blue)](https://modelcontextprotocol.io)
+[![runtime deps](https://img.shields.io/badge/runtime%20deps-1-brightgreen)](./package.json)
 
 MCP server: embedding pipeline ops + drift detection for production RAG. Wraps the Python library [`embspec`](https://github.com/MukundaKatta/embspec) by re-implementing its query-shaped surface natively in TypeScript so the MCP server has zero runtime deps beyond the MCP SDK.
 
