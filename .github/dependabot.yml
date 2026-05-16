@@ -1,0 +1,32 @@
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: "America/Chicago"
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+    groups:
+      # Keep the MCP SDK family together. They version in lockstep upstream;
+      # splitting them into separate PRs just means more CI runs for the
+      # same review surface.
+      mcp-sdk:
+        patterns:
+          - "@modelcontextprotocol/*"
+      # Dev tooling (tsc / tsx / @types/node) is low-risk and high-churn.
+      # Batch into one PR so review noise stays bounded.
+      dev-deps:
+        dependency-type: development
+        patterns:
+          - "*"
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: monthly
+    labels:
+      - ci
