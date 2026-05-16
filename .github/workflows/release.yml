@@ -1,0 +1,107 @@
+name: release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to release (e.g. v0.1.1)'
+        required: true
+
+# Hard gate: only the canonical repo can publish. Forks running this
+# workflow accidentally would fail at the OIDC step anyway, but bail early
+# so the failure message is human-readable.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    if: github.repository == 'MukundaKatta/embspec-mcp'
+    runs-on: ubuntu-latest
+
+    # `id-token: write` is what enables npm provenance via OIDC; we don't
+    # need or want an NPM_TOKEN secret in this repo.
+    permissions:
+      contents: write
+      id-token: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # full history so the changelog extractor can see prior tags
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Resolve tag
+        id: tag
+        run: |
+          if [ -n "${{ github.event.inputs.tag }}" ]; then
+            echo "ref=${{ github.event.inputs.tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "ref=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Verify tag matches package.json version
+        run: |
+          tag="${{ steps.tag.outputs.ref }}"
+          pkg_version=$(node -p "require('./package.json').version")
+          # Allow either `v0.1.0` or `0.1.0` style tags.
+          tag_version="${tag#v}"
+          if [ "$tag_version" != "$pkg_version" ]; then
+            echo "::error::Tag ($tag_version) does not match package.json version ($pkg_version). Refusing to publish."
+            exit 1
+          fi
+
+      - name: Install
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Build
+        run: npm run build
+
+      - name: Test
+        run: npm test
+
+      - name: Publish to npm with provenance
+        run: npm publish --access public --provenance
+        env:
+          # No NPM_TOKEN: npm CLI 9.5+ uses the OIDC id-token from GH Actions.
+          NODE_AUTH_TOKEN: ${{ secrets.NODE_AUTH_TOKEN }}
+
+      - name: Extract release notes from CHANGELOG
+        id: notes
+        run: |
+          tag="${{ steps.tag.outputs.ref }}"
+          version="${tag#v}"
+          # Pull the section between `## [<version>]` and the next `## [`
+          awk -v ver="$version" '
+            $0 ~ "^## \\[" ver "\\]" { capture=1; next }
+            capture && /^## \[/ { exit }
+            capture { print }
+          ' CHANGELOG.md > /tmp/release-notes.md
+          if [ ! -s /tmp/release-notes.md ]; then
+            echo "No CHANGELOG section for $version; using generic notes."
+            echo "Release $tag of @mukundakatta/embspec-mcp." > /tmp/release-notes.md
+          fi
+          echo "path=/tmp/release-notes.md" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.ref }}
+          name: ${{ steps.tag.outputs.ref }}
+          body_path: ${{ steps.notes.outputs.path }}
+          draft: false
+          prerelease: false
