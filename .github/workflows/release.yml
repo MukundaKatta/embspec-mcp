@@ -36,7 +36,7 @@ jobs:
         with:
           fetch-depth: 0  # full history so the changelog extractor can see prior tags
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: '20'
           cache: npm
