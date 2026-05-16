@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/MukundaKatta/embspec-mcp/security/policy
+    about: Report security issues privately per SECURITY.md. Do not file a public issue.
+  - name: MCP protocol / SDK bug
+    url: https://github.com/modelcontextprotocol/typescript-sdk/issues
+    about: For bugs in the underlying @modelcontextprotocol/sdk (JSON-RPC framing, stdio transport), file upstream.
+  - name: Python sibling library
+    url: https://github.com/MukundaKatta/embspec/issues
+    about: For bugs in the canonical comparison logic or new manifest fields, the Python embspec library is the source of truth.
