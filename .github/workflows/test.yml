@@ -29,7 +29,7 @@ jobs:
           # path-separator or shebang regressions to those users.
           - node: '20'
             os: macos-latest
-          - node: '20'
+          - node: '22'
             os: windows-latest
 
     steps:
