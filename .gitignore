@@ -4,3 +4,18 @@ dist/
 .DS_Store
 .idea/
 .vscode/
+
+# npm pack output (don't commit local tarballs)
+*.tgz
+
+# coverage
+coverage/
+.nyc_output/
+
+# env / secrets
+.env
+.env.local
+.env.*.local
+
+# OS junk
+Thumbs.db

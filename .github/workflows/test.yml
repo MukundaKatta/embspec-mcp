@@ -1,0 +1,90 @@
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# Cancel in-flight runs for the same branch/PR.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Node ${{ matrix.node }} / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ['18', '20', '22']
+        os: [ubuntu-latest]
+        include:
+          # Spot-check the LTS on macOS + Windows so we don't ship
+          # path-separator or shebang regressions to those users.
+          - node: '20'
+            os: macos-latest
+          - node: '22'
+            os: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Lint (tsc --noEmit)
+        run: npm run lint
+
+      - name: Build
+        run: npm run build
+
+      - name: Unit tests
+        run: npm test
+
+      # MCP servers communicate over stdio. The most common breakage is
+      # "the server crashes on startup, or fails to register its tools."
+      # A `tools/list` round-trip catches both.
+      - name: Stdio smoke test (tools/list)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          out=$(printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' \
+            | node dist/server.js \
+            | head -n 1)
+          echo "server response: $out"
+          # We expect both tools registered.
+          for tool in assert_compatible neighbor_stability; do
+            if ! grep -q "\"$tool\"" <<<"$out"; then
+              echo "::error::tools/list response is missing $tool"
+              exit 1
+            fi
+          done
+
+      - name: Package smoke (npm pack)
+        if: matrix.os == 'ubuntu-latest' && matrix.node == '20'
+        run: |
+          npm pack --dry-run
+          # Verify dist/, README, LICENSE, server.json are in the tarball.
+          npm pack --json | node -e '
+            const fs = require("fs");
+            const j = JSON.parse(fs.readFileSync(0, "utf8"));
+            const files = j[0].files.map(f => f.path);
+            const required = ["dist/server.js", "README.md", "LICENSE", "server.json"];
+            const missing = required.filter(r => !files.includes(r) && !files.some(f => f.startsWith(r)));
+            if (missing.length) {
+              console.error("missing from tarball:", missing);
+              process.exit(1);
+            }
+          '
