@@ -12,7 +12,8 @@
     "declaration": true,
     "sourceMap": false,
     "resolveJsonModule": true,
-    "allowImportingTsExtensions": false
+    "allowImportingTsExtensions": false,
+    "types": ["node"]
   },
   "include": ["src/**/*"]
 }
