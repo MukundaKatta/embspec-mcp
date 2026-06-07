@@ -16,6 +16,10 @@
  *                          Same metric Python embspec produces in
  *                          `neighbor_stability()`.
  *
+ * The pure tool logic lives in `./core.js` so the unit tests exercise
+ * exactly the code that ships. This file only handles MCP wiring: the tool
+ * catalog, request dispatch, and the stdio transport.
+ *
  * Wraps the Python library at https://github.com/MukundaKatta/embspec by
  * re-implementing its query-shaped surface natively in TypeScript so the
  * MCP server has zero runtime dependencies beyond the MCP SDK.
@@ -39,6 +43,14 @@ import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js';
+
+import {
+  assertCompatible,
+  neighborStability,
+  StabilityArgumentError,
+  type EmbeddingSpec,
+  type ManifestJson,
+} from './core.js';
 
 const VERSION = '0.1.0';
 
@@ -180,108 +192,21 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
   }
 });
 
-// --- types ---------------------------------------------------------------
-
-type Normalization = 'l2' | 'none';
-
-interface EmbeddingSpec {
-  model_id: string;
-  dimension: number;
-  model_version?: string | null;
-  normalization?: Normalization;
-}
-
-interface ManifestJson {
-  embspec_format_version?: number;
-  index_name: string;
-  embedding: EmbeddingSpec;
-}
-
 // --- tool implementations ------------------------------------------------
 
 function assertCompatibleTool(args: {
   manifest: ManifestJson;
   query_spec: EmbeddingSpec;
 }) {
-  const manifest = args.manifest;
-  const querySpec = args.query_spec;
-
-  // Mirror Python embspec's IndexManifest.assert_compatible field order so
-  // the first reported mismatch matches the Python lib's error message.
-  const manifestEmb = manifest.embedding;
-  const queryNorm = querySpec.normalization ?? 'l2';
-  const manifestNorm = manifestEmb.normalization ?? 'l2';
-  const queryVer = querySpec.model_version ?? null;
-  const manifestVer = manifestEmb.model_version ?? null;
-
-  const failures: Array<{
-    field: string;
-    manifest_value: unknown;
-    query_value: unknown;
-  }> = [];
-
-  if (queryVer !== manifestVer) {
-    failures.push({
-      field: 'embedding.model_version',
-      manifest_value: manifestVer,
-      query_value: queryVer,
-    });
+  if (!args?.manifest || !args.manifest.embedding) {
+    return errorResult(
+      'assert_compatible: manifest with an "embedding" object is required',
+    );
   }
-  if (queryNorm !== manifestNorm) {
-    failures.push({
-      field: 'embedding.normalization',
-      manifest_value: manifestNorm,
-      query_value: queryNorm,
-    });
+  if (!args.query_spec) {
+    return errorResult('assert_compatible: query_spec is required');
   }
-  if (querySpec.dimension !== manifestEmb.dimension) {
-    failures.push({
-      field: 'embedding.dimension',
-      manifest_value: manifestEmb.dimension,
-      query_value: querySpec.dimension,
-    });
-  }
-  if (querySpec.model_id !== manifestEmb.model_id) {
-    failures.push({
-      field: 'embedding.model_id',
-      manifest_value: manifestEmb.model_id,
-      query_value: querySpec.model_id,
-    });
-  }
-
-  // Python embspec raises on the FIRST mismatch in this order:
-  // model_id > dimension > model_version > normalization. We sort to match.
-  failures.sort((a, b) => {
-    const order = [
-      'embedding.model_id',
-      'embedding.dimension',
-      'embedding.model_version',
-      'embedding.normalization',
-    ];
-    return order.indexOf(a.field) - order.indexOf(b.field);
-  });
-
-  if (failures.length === 0) {
-    return jsonResult({
-      ok: true,
-      index_name: manifest.index_name,
-    });
-  }
-
-  const first = failures[0]!;
-  return jsonResult({
-    ok: false,
-    index_name: manifest.index_name,
-    failed_field: first.field,
-    manifest_value: first.manifest_value,
-    query_value: first.query_value,
-    all_failures: failures,
-    message:
-      `Index ${JSON.stringify(manifest.index_name)} manifest declares ` +
-      `${first.field}=${JSON.stringify(first.manifest_value)} but query encoder ` +
-      `uses ${JSON.stringify(first.query_value)}. ` +
-      `Re-encode the corpus or roll the query encoder back.`,
-  });
+  return jsonResult(assertCompatible(args.manifest, args.query_spec));
 }
 
 function neighborStabilityTool(args: {
@@ -290,72 +215,21 @@ function neighborStabilityTool(args: {
   k?: number;
   regression_threshold?: number;
 }) {
-  const k = args.k ?? 10;
-  const regressionThreshold = args.regression_threshold ?? 0.5;
-  if (k < 1) {
-    return errorResult('neighbor_stability: k must be >= 1');
-  }
-  if (regressionThreshold < 0 || regressionThreshold > 1) {
-    return errorResult(
-      'neighbor_stability: regression_threshold must be in [0, 1]',
+  try {
+    return jsonResult(
+      neighborStability(
+        args.old_results ?? {},
+        args.new_results ?? {},
+        args.k,
+        args.regression_threshold,
+      ),
     );
-  }
-
-  const oldKeys = Object.keys(args.old_results ?? {});
-  const newKeys = new Set(Object.keys(args.new_results ?? {}));
-  const common = oldKeys.filter((k) => newKeys.has(k)).sort();
-
-  if (common.length === 0) {
-    return jsonResult({
-      n_probes: 0,
-      k,
-      mean_overlap_at_k: 0,
-      mean_jaccard_at_k: 0,
-      regression_probe_ids: [],
-      regression_count: 0,
-      is_safe_to_deploy: false,
-    });
-  }
-
-  let overlapSum = 0;
-  let jaccardSum = 0;
-  const regressions: string[] = [];
-
-  for (const probeId of common) {
-    const oldTopk = new Set(args.old_results[probeId]!.slice(0, k));
-    const newTopk = new Set(args.new_results[probeId]!.slice(0, k));
-    let intersect = 0;
-    for (const id of oldTopk) {
-      if (newTopk.has(id)) intersect++;
+  } catch (err) {
+    if (err instanceof StabilityArgumentError) {
+      return errorResult(err.message);
     }
-    const union = new Set([...oldTopk, ...newTopk]).size;
-    const overlap = intersect / k;
-    const jaccard = union > 0 ? intersect / union : 0;
-    overlapSum += overlap;
-    jaccardSum += jaccard;
-    if (overlap < regressionThreshold) {
-      regressions.push(probeId);
-    }
+    throw err;
   }
-
-  const n = common.length;
-  const meanOverlap = overlapSum / n;
-  const meanJaccard = jaccardSum / n;
-  const regressionFraction = regressions.length / n;
-  // Default deploy-safety thresholds match Python embspec's
-  // StabilityReport.is_safe_to_deploy(): >= 0.85 mean overlap and
-  // <= 5% regressions.
-  const isSafe = meanOverlap >= 0.85 && regressionFraction <= 0.05;
-
-  return jsonResult({
-    n_probes: n,
-    k,
-    mean_overlap_at_k: meanOverlap,
-    mean_jaccard_at_k: meanJaccard,
-    regression_probe_ids: regressions,
-    regression_count: regressions.length,
-    is_safe_to_deploy: isSafe,
-  });
 }
 
 // --- helpers --------------------------------------------------------------

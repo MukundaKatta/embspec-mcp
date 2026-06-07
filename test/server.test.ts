@@ -1,135 +1,22 @@
 /**
- * Unit tests against the same tool functions exposed by the MCP server.
+ * Unit tests for the embspec MCP server's core logic.
  *
- * These don't spin up a full stdio server (the SDK harness for that is
- * heavyweight); instead they cover the same JSON-shaped functions the
- * server's request dispatcher calls, mirroring the agentcast-mcp
- * test pattern.
+ * These import the SAME functions the server's request dispatcher calls
+ * (from `../src/core.ts`) rather than re-implementing them, so the tests
+ * exercise exactly the code that ships. There are no duplicated copies to
+ * drift out of sync.
  */
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-// Re-import the same logic. Since the server builds the tool dispatcher
-// inline, we duplicate the small pure functions here for testing.
-// In a v0.2 we'd factor them into a shared module.
-
-interface ManifestJson {
-  embspec_format_version?: number;
-  index_name: string;
-  embedding: {
-    model_id: string;
-    dimension: number;
-    model_version?: string | null;
-    normalization?: 'l2' | 'none';
-  };
-}
-
-function assertCompatible(
-  manifest: ManifestJson,
-  query: ManifestJson['embedding'],
-) {
-  const m = manifest.embedding;
-  const failures: Array<{
-    field: string;
-    manifest_value: unknown;
-    query_value: unknown;
-  }> = [];
-
-  if ((query.model_version ?? null) !== (m.model_version ?? null)) {
-    failures.push({
-      field: 'embedding.model_version',
-      manifest_value: m.model_version ?? null,
-      query_value: query.model_version ?? null,
-    });
-  }
-  if ((query.normalization ?? 'l2') !== (m.normalization ?? 'l2')) {
-    failures.push({
-      field: 'embedding.normalization',
-      manifest_value: m.normalization ?? 'l2',
-      query_value: query.normalization ?? 'l2',
-    });
-  }
-  if (query.dimension !== m.dimension) {
-    failures.push({
-      field: 'embedding.dimension',
-      manifest_value: m.dimension,
-      query_value: query.dimension,
-    });
-  }
-  if (query.model_id !== m.model_id) {
-    failures.push({
-      field: 'embedding.model_id',
-      manifest_value: m.model_id,
-      query_value: query.model_id,
-    });
-  }
-
-  failures.sort((a, b) => {
-    const order = [
-      'embedding.model_id',
-      'embedding.dimension',
-      'embedding.model_version',
-      'embedding.normalization',
-    ];
-    return order.indexOf(a.field) - order.indexOf(b.field);
-  });
-
-  return failures;
-}
-
-function neighborStability(
-  oldRes: Record<string, string[]>,
-  newRes: Record<string, string[]>,
-  k = 10,
-  regressionThreshold = 0.5,
-) {
-  const oldKeys = Object.keys(oldRes);
-  const newKeys = new Set(Object.keys(newRes));
-  const common = oldKeys.filter((k2) => newKeys.has(k2)).sort();
-
-  if (common.length === 0) {
-    return {
-      n_probes: 0,
-      k,
-      mean_overlap_at_k: 0,
-      mean_jaccard_at_k: 0,
-      regression_probe_ids: [],
-      is_safe_to_deploy: false,
-    };
-  }
-
-  let overlapSum = 0;
-  let jaccardSum = 0;
-  const regressions: string[] = [];
-
-  for (const probeId of common) {
-    const oldTopk = new Set(oldRes[probeId]!.slice(0, k));
-    const newTopk = new Set(newRes[probeId]!.slice(0, k));
-    let intersect = 0;
-    for (const id of oldTopk) {
-      if (newTopk.has(id)) intersect++;
-    }
-    const union = new Set([...oldTopk, ...newTopk]).size;
-    const overlap = intersect / k;
-    const jaccard = union > 0 ? intersect / union : 0;
-    overlapSum += overlap;
-    jaccardSum += jaccard;
-    if (overlap < regressionThreshold) regressions.push(probeId);
-  }
-
-  const n = common.length;
-  const meanOverlap = overlapSum / n;
-  const regressionFraction = regressions.length / n;
-  return {
-    n_probes: n,
-    k,
-    mean_overlap_at_k: meanOverlap,
-    mean_jaccard_at_k: jaccardSum / n,
-    regression_probe_ids: regressions,
-    is_safe_to_deploy: meanOverlap >= 0.85 && regressionFraction <= 0.05,
-  };
-}
+import {
+  assertCompatible,
+  compatibilityFailures,
+  neighborStability,
+  StabilityArgumentError,
+  type ManifestJson,
+} from '../src/core.ts';
 
 const baseManifest: ManifestJson = {
   embspec_format_version: 1,
@@ -144,53 +31,102 @@ const baseManifest: ManifestJson = {
 
 // --- assert_compatible ---------------------------------------------------
 
-test('assert_compatible: identical specs return no failures', () => {
-  const failures = assertCompatible(baseManifest, baseManifest.embedding);
-  assert.equal(failures.length, 0);
+test('assert_compatible: identical specs are compatible', () => {
+  const r = assertCompatible(baseManifest, baseManifest.embedding);
+  assert.equal(r.ok, true);
+  assert.equal(r.index_name, 'prod-v3');
+  assert.equal(r.all_failures, undefined);
+  assert.equal(r.message, undefined);
 });
 
 test('assert_compatible: model_id mismatch is reported first', () => {
-  const failures = assertCompatible(baseManifest, {
+  const r = assertCompatible(baseManifest, {
     ...baseManifest.embedding,
     model_id: 'openai:text-embedding-3-small',
   });
-  assert.ok(failures.length >= 1);
-  assert.equal(failures[0]!.field, 'embedding.model_id');
+  assert.equal(r.ok, false);
+  assert.equal(r.failed_field, 'embedding.model_id');
+  assert.equal(r.manifest_value, 'amazon.titan-embed-text-v2:0');
+  assert.equal(r.query_value, 'openai:text-embedding-3-small');
+  assert.ok(r.message && r.message.includes('prod-v3'));
 });
 
 test('assert_compatible: dimension mismatch reported when model matches', () => {
-  const failures = assertCompatible(baseManifest, {
+  const r = assertCompatible(baseManifest, {
     ...baseManifest.embedding,
     dimension: 1536,
   });
-  assert.equal(failures[0]!.field, 'embedding.dimension');
+  assert.equal(r.ok, false);
+  assert.equal(r.failed_field, 'embedding.dimension');
+  assert.equal(r.manifest_value, 1024);
+  assert.equal(r.query_value, 1536);
 });
 
 test('assert_compatible: model_version mismatch reported', () => {
-  const failures = assertCompatible(baseManifest, {
+  const r = assertCompatible(baseManifest, {
     ...baseManifest.embedding,
     model_version: 'v2',
   });
-  assert.equal(failures[0]!.field, 'embedding.model_version');
+  assert.equal(r.ok, false);
+  assert.equal(r.failed_field, 'embedding.model_version');
 });
 
 test('assert_compatible: normalization mismatch reported', () => {
-  const failures = assertCompatible(baseManifest, {
+  const r = assertCompatible(baseManifest, {
     ...baseManifest.embedding,
     normalization: 'none',
   });
-  assert.equal(failures[0]!.field, 'embedding.normalization');
+  assert.equal(r.ok, false);
+  assert.equal(r.failed_field, 'embedding.normalization');
+});
+
+test('assert_compatible: omitted normalization defaults to l2', () => {
+  // Manifest l2, query omits normalization -> treated as l2 -> compatible.
+  const r = assertCompatible(baseManifest, {
+    model_id: baseManifest.embedding.model_id,
+    dimension: baseManifest.embedding.dimension,
+    model_version: null,
+  });
+  assert.equal(r.ok, true);
+});
+
+test('assert_compatible: omitted model_version is treated as null', () => {
+  const r = assertCompatible(baseManifest, {
+    model_id: baseManifest.embedding.model_id,
+    dimension: baseManifest.embedding.dimension,
+    // model_version omitted -> null -> matches manifest null
+    normalization: 'l2',
+  });
+  assert.equal(r.ok, true);
 });
 
 test('assert_compatible: model_id wins precedence over dimension', () => {
-  const failures = assertCompatible(baseManifest, {
+  const r = assertCompatible(baseManifest, {
     model_id: 'other',
     dimension: 9999,
     model_version: null,
     normalization: 'l2',
   });
-  assert.equal(failures[0]!.field, 'embedding.model_id');
-  assert.ok(failures.length >= 2);
+  assert.equal(r.failed_field, 'embedding.model_id');
+  assert.ok(r.all_failures && r.all_failures.length >= 2);
+});
+
+test('compatibilityFailures: returns all mismatches in precedence order', () => {
+  const failures = compatibilityFailures(baseManifest.embedding, {
+    model_id: 'other',
+    dimension: 1,
+    model_version: 'v9',
+    normalization: 'none',
+  });
+  assert.deepEqual(
+    failures.map((f) => f.field),
+    [
+      'embedding.model_id',
+      'embedding.dimension',
+      'embedding.model_version',
+      'embedding.normalization',
+    ],
+  );
 });
 
 // --- neighbor_stability --------------------------------------------------
@@ -202,19 +138,17 @@ test('neighbor_stability: identical results give perfect overlap', () => {
   assert.equal(r.mean_overlap_at_k, 1.0);
   assert.equal(r.mean_jaccard_at_k, 1.0);
   assert.equal(r.is_safe_to_deploy, true);
-  assert.equal(r.regression_probe_ids.length, 0);
+  assert.equal(r.regression_count, 0);
+  assert.deepEqual(r.regression_probe_ids, []);
 });
 
 test('neighbor_stability: disjoint results give zero overlap', () => {
-  const r = neighborStability(
-    { q1: ['a', 'b'] },
-    { q1: ['c', 'd'] },
-    2,
-  );
+  const r = neighborStability({ q1: ['a', 'b'] }, { q1: ['c', 'd'] }, 2);
   assert.equal(r.mean_overlap_at_k, 0);
   assert.equal(r.mean_jaccard_at_k, 0);
   assert.equal(r.is_safe_to_deploy, false);
   assert.deepEqual(r.regression_probe_ids, ['q1']);
+  assert.equal(r.regression_count, 1);
 });
 
 test('neighbor_stability: partial overlap metrics correct', () => {
@@ -240,6 +174,7 @@ test('neighbor_stability: empty inputs return zero report', () => {
   const r = neighborStability({}, {}, 5);
   assert.equal(r.n_probes, 0);
   assert.equal(r.is_safe_to_deploy, false);
+  assert.equal(r.regression_count, 0);
 });
 
 test('neighbor_stability: truncates to k when results are longer', () => {
@@ -249,4 +184,56 @@ test('neighbor_stability: truncates to k when results are longer', () => {
     2,
   );
   assert.equal(r.mean_overlap_at_k, 1.0);
+});
+
+test('neighbor_stability: default k is 10', () => {
+  const r = neighborStability({ q1: ['a'] }, { q1: ['a'] });
+  assert.equal(r.k, 10);
+  // 1 hit out of k=10 -> overlap 0.1.
+  assert.equal(r.mean_overlap_at_k, 0.1);
+});
+
+test('neighbor_stability: regression_threshold flags borderline probes', () => {
+  // overlap@k = 2/4 = 0.5 with k=4. threshold 0.6 -> regression; 0.5 -> not.
+  const old = { q1: ['a', 'b', 'c', 'd'] };
+  const neu = { q1: ['a', 'b', 'x', 'y'] };
+  const flagged = neighborStability(old, neu, 4, 0.6);
+  assert.deepEqual(flagged.regression_probe_ids, ['q1']);
+  const notFlagged = neighborStability(old, neu, 4, 0.5);
+  assert.deepEqual(notFlagged.regression_probe_ids, []);
+});
+
+test('neighbor_stability: rejects k < 1', () => {
+  assert.throws(
+    () => neighborStability({ q1: ['a'] }, { q1: ['a'] }, 0),
+    StabilityArgumentError,
+  );
+});
+
+test('neighbor_stability: rejects out-of-range regression_threshold', () => {
+  assert.throws(
+    () => neighborStability({ q1: ['a'] }, { q1: ['a'] }, 5, 1.5),
+    StabilityArgumentError,
+  );
+  assert.throws(
+    () => neighborStability({ q1: ['a'] }, { q1: ['a'] }, 5, -0.1),
+    StabilityArgumentError,
+  );
+});
+
+test('neighbor_stability: is_safe_to_deploy needs >=0.85 overlap', () => {
+  // 9/10 of 10 probes perfect, 1 probe disjoint -> mean overlap 0.9 but the
+  // regression fraction is 0.1 (> 0.05) so it is NOT safe.
+  const old: Record<string, string[]> = {};
+  const neu: Record<string, string[]> = {};
+  for (let i = 0; i < 9; i++) {
+    old['q' + i] = ['a'];
+    neu['q' + i] = ['a'];
+  }
+  old['q9'] = ['a'];
+  neu['q9'] = ['z'];
+  const r = neighborStability(old, neu, 1);
+  assert.equal(r.mean_overlap_at_k, 0.9);
+  assert.equal(r.regression_count, 1);
+  assert.equal(r.is_safe_to_deploy, false);
 });
