@@ -127,6 +127,24 @@ The Python source lives at [github.com/MukundaKatta/embspec](https://github.com/
 
 [github.com/MukundaKatta/embspec-mcp](https://github.com/MukundaKatta/embspec-mcp)
 
+## Development
+
+```bash
+git clone https://github.com/MukundaKatta/embspec-mcp.git
+cd embspec-mcp
+npm ci
+
+npm run lint    # tsc --noEmit (type-check only)
+npm run build   # compile src/ -> dist/
+npm test        # node --test against the real core logic
+npm run dev     # run the server from source over stdio (tsx)
+```
+
+The pure tool logic lives in [`src/core.ts`](./src/core.ts) and is imported by
+both the MCP server ([`src/server.ts`](./src/server.ts)) and the test suite
+([`test/server.test.ts`](./test/server.test.ts)), so the tests exercise exactly
+the code that ships.
+
 ## License
 
-MIT.
+[MIT](./LICENSE).
